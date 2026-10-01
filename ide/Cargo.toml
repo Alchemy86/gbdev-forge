@@ -14,6 +14,7 @@ forge-core = { path = "../crates/forge-core" }
 forge-png2tile = { path = "../cli/forge-png2tile" }
 eframe = "0.29"
 egui = "0.29"
+egui_dock = "0.14"
 image = { version = "0.25", default-features = false, features = ["png"] }
 rfd = "0.15"
 

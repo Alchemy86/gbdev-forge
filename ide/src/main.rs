@@ -1,3 +1,4 @@
+mod disasm;
 mod emulator;
 mod png2tile_panel;
 
@@ -5,6 +6,7 @@ use std::path::PathBuf;
 
 use eframe::egui;
 use egui::{Color32, RichText};
+use egui_dock::{DockArea, DockState, NodeIndex, Style, TabViewer};
 use terminalgb::KeypadKey;
 
 use emulator::Emulator;
@@ -15,12 +17,33 @@ use png2tile_panel::Png2TilePanel;
 /// mirrored into `ide/assets/test-roms/` so the IDE is self-contained.
 const BUNDLED_ROM: &[u8] = include_bytes!("../assets/test-roms/gbselftest.gb");
 
-#[derive(PartialEq, Eq, Clone, Copy)]
-enum RightTab {
+#[derive(PartialEq, Eq, Clone, Copy, Debug, Hash)]
+enum Tab {
+    Editor,
+    Emulator,
     Memory,
     Watch,
     Registers,
+    Disassembly,
+    Breakpoints,
+    Console,
     Png2Tile,
+}
+
+impl Tab {
+    fn title(&self) -> &'static str {
+        match self {
+            Tab::Editor => "Editor",
+            Tab::Emulator => "Emulator",
+            Tab::Memory => "Memory",
+            Tab::Watch => "Watch",
+            Tab::Registers => "Registers",
+            Tab::Disassembly => "Disassembly",
+            Tab::Breakpoints => "Breakpoints",
+            Tab::Console => "Console",
+            Tab::Png2Tile => "PNG->Tile",
+        }
+    }
 }
 
 struct ForgeIdeApp {
@@ -33,17 +56,42 @@ struct ForgeIdeApp {
     emulator: Option<Emulator>,
     rom_path_input: String,
     screen_texture: Option<egui::TextureHandle>,
+    disasm_count: usize,
 
     // Watch panel inputs
     watch_addr_input: String,
     watch_len_input: String,
 
-    right_tab: RightTab,
+    // Breakpoint panel input
+    breakpoint_input: String,
+
+    // Save state (in-memory slot; "Save to file"/"Load from file" also
+    // available via the core's own `save_state`/`load_state`, see
+    // docs/mcp.md's `save_state`/`load_state` actions in TerminalGB).
+    state_slot: Option<Vec<u8>>,
+
     png2tile: Png2TilePanel,
+    dock_state: DockState<Tab>,
 }
 
 impl Default for ForgeIdeApp {
     fn default() -> Self {
+        let mut dock_state = DockState::new(vec![Tab::Emulator]);
+        let surface = dock_state.main_surface_mut();
+        let [emulator_node, right] =
+            surface.split_right(NodeIndex::root(), 0.7, vec![Tab::Registers]);
+        let [_, _] = surface.split_below(
+            right,
+            0.4,
+            vec![Tab::Memory, Tab::Watch, Tab::Breakpoints, Tab::Console],
+        );
+        let [_, _] = surface.split_left(emulator_node, 0.35, vec![Tab::Editor]);
+        let [_, _] = surface.split_below(
+            emulator_node,
+            0.5,
+            vec![Tab::Disassembly, Tab::Png2Tile],
+        );
+
         Self {
             open_file: None,
             editor_text: String::new(),
@@ -51,10 +99,13 @@ impl Default for ForgeIdeApp {
             emulator: None,
             rom_path_input: String::new(),
             screen_texture: None,
+            disasm_count: 12,
             watch_addr_input: "FF80".to_string(),
             watch_len_input: "16".to_string(),
-            right_tab: RightTab::Memory,
+            breakpoint_input: "0150".to_string(),
+            state_slot: None,
             png2tile: Png2TilePanel::default(),
+            dock_state,
         }
     }
 }
@@ -117,6 +168,8 @@ impl ForgeIdeApp {
                     running: false,
                     frame_count: 0,
                     watch: None,
+                    breakpoints: Default::default(),
+                    console: Vec::new(),
                     gb,
                 });
             }
@@ -167,8 +220,157 @@ impl ForgeIdeApp {
         });
     }
 
+    fn toolbar(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            if ui.button("Open file").clicked() {
+                self.open_file_dialog();
+            }
+            if ui.button("Save file").clicked() {
+                self.save_file();
+            }
+            ui.separator();
+            ui.label("ROM path:");
+            ui.text_edit_singleline(&mut self.rom_path_input);
+            if ui.button("Load ROM").clicked() {
+                let path = PathBuf::from(self.rom_path_input.trim());
+                self.load_rom(path);
+            }
+            if ui.button("Load bundled test ROM").clicked() {
+                self.load_bundled_rom();
+            }
+            ui.separator();
+            let has_emu = self.emulator.is_some();
+            ui.add_enabled_ui(has_emu, |ui| {
+                let running = self.emulator.as_ref().map(|e| e.running).unwrap_or(false);
+                if ui.button(if running { "Pause" } else { "Play" }).clicked() {
+                    if let Some(emu) = &mut self.emulator {
+                        emu.running = !emu.running;
+                    }
+                }
+                if ui.button("Step instruction").clicked() {
+                    if let Some(emu) = &mut self.emulator {
+                        emu.step_instruction();
+                    }
+                }
+                if ui.button("Step frame").clicked() {
+                    if let Some(emu) = &mut self.emulator {
+                        emu.step_frame();
+                    }
+                }
+                let has_breakpoints = self
+                    .emulator
+                    .as_ref()
+                    .map(|e| !e.breakpoints.is_empty())
+                    .unwrap_or(false);
+                ui.add_enabled_ui(has_breakpoints, |ui| {
+                    if ui.button("Run to breakpoint").clicked() {
+                        if let Some(emu) = &mut self.emulator {
+                            emu.run_until_breakpoint();
+                        }
+                    }
+                });
+                ui.separator();
+                if ui.button("Save state").clicked() {
+                    if let Some(emu) = &mut self.emulator {
+                        self.state_slot = Some(emu.save_state());
+                        emu.log("state saved to in-memory slot");
+                    }
+                }
+                ui.add_enabled_ui(self.state_slot.is_some(), |ui| {
+                    if ui.button("Load state").clicked() {
+                        if let (Some(emu), Some(data)) = (&mut self.emulator, &self.state_slot) {
+                            match emu.load_state(data) {
+                                Ok(()) => emu.log("state loaded from in-memory slot"),
+                                Err(e) => emu.log(format!("load state failed: {e}")),
+                            }
+                        }
+                    }
+                });
+            });
+            if !self.editor_status.is_empty() {
+                ui.separator();
+                ui.label(&self.editor_status);
+            }
+        });
+    }
+}
+
+/// Borrows the rest of `ForgeIdeApp`'s state to render each dock tab.
+/// `egui_dock`'s `DockState` must be a separate field the app owns, so the
+/// tab-rendering code is split into this short-lived viewer rather than a
+/// method directly on `ForgeIdeApp` (the usual egui_dock split-borrow shape).
+struct AppTabViewer<'a> {
+    open_file: &'a Option<PathBuf>,
+    editor_text: &'a mut String,
+    emulator: &'a mut Option<Emulator>,
+    screen_texture: &'a Option<egui::TextureHandle>,
+    watch_addr_input: &'a mut String,
+    watch_len_input: &'a mut String,
+    breakpoint_input: &'a mut String,
+    disasm_count: &'a mut usize,
+    editor_status: &'a mut String,
+    png2tile: &'a mut Png2TilePanel,
+}
+
+impl TabViewer for AppTabViewer<'_> {
+    type Tab = Tab;
+
+    fn title(&mut self, tab: &mut Tab) -> egui::WidgetText {
+        tab.title().into()
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
+        match tab {
+            Tab::Editor => self.editor_panel(ui),
+            Tab::Emulator => self.emulator_panel(ui),
+            Tab::Memory => self.memory_panel(ui),
+            Tab::Watch => self.watch_panel(ui),
+            Tab::Registers => self.registers_panel(ui),
+            Tab::Disassembly => self.disassembly_panel(ui),
+            Tab::Breakpoints => self.breakpoints_panel(ui),
+            Tab::Console => self.console_panel(ui),
+            Tab::Png2Tile => self.png2tile_panel(ui),
+        }
+    }
+}
+
+impl AppTabViewer<'_> {
+    fn editor_panel(&mut self, ui: &mut egui::Ui) {
+        ui.label(
+            self.open_file
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "(no file open)".to_string()),
+        );
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.add(
+                egui::TextEdit::multiline(self.editor_text)
+                    .font(egui::TextStyle::Monospace)
+                    .desired_width(f32::INFINITY)
+                    .desired_rows(40),
+            );
+        });
+    }
+
+    fn emulator_panel(&mut self, ui: &mut egui::Ui) {
+        if let Some(tex) = self.screen_texture {
+            let size = tex.size_vec2() * 3.0;
+            ui.image((tex.id(), size));
+        } else {
+            ui.label("No ROM loaded. Use \"Load bundled test ROM\" for a quick smoke test.");
+        }
+        if let Some(emu) = self.emulator.as_ref() {
+            ui.label(format!("{} -- {}", emu.rom_title, emu.rom_path));
+            ui.label(
+                RichText::new("Arrow keys / Z (A) / X (B) / Enter (Start) / Backspace (Select)")
+                    .weak()
+                    .small(),
+            );
+        }
+    }
+
     fn memory_panel(&mut self, ui: &mut egui::Ui) {
-        let Some(emu) = &mut self.emulator else {
+        let Some(emu) = self.emulator.as_mut() else {
             ui.label("Load a ROM to see memory.");
             return;
         };
@@ -196,7 +398,7 @@ impl ForgeIdeApp {
     }
 
     fn registers_panel(&mut self, ui: &mut egui::Ui) {
-        let Some(emu) = &self.emulator else {
+        let Some(emu) = self.emulator.as_ref() else {
             ui.label("Load a ROM to see registers.");
             return;
         };
@@ -237,28 +439,28 @@ impl ForgeIdeApp {
     fn watch_panel(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label("Address (hex):");
-            ui.text_edit_singleline(&mut self.watch_addr_input);
+            ui.text_edit_singleline(self.watch_addr_input);
             ui.label("Length:");
-            ui.text_edit_singleline(&mut self.watch_len_input);
+            ui.text_edit_singleline(self.watch_len_input);
             if ui.button("Watch").clicked() {
                 let addr = u16::from_str_radix(self.watch_addr_input.trim_start_matches("0x"), 16);
                 let len: Result<usize, _> = self.watch_len_input.trim().parse();
                 if let (Ok(addr), Ok(len)) = (addr, len) {
-                    if let Some(emu) = &mut self.emulator {
+                    if let Some(emu) = self.emulator.as_mut() {
                         emu.start_watch(addr, len.max(1));
                     }
                 } else {
-                    self.editor_status = "watch: bad address or length".to_string();
+                    *self.editor_status = "watch: bad address or length".to_string();
                 }
             }
             if ui.button("Clear watch").clicked() {
-                if let Some(emu) = &mut self.emulator {
+                if let Some(emu) = self.emulator.as_mut() {
                     emu.clear_watch();
                 }
             }
         });
         ui.separator();
-        let Some(emu) = &self.emulator else {
+        let Some(emu) = self.emulator.as_ref() else {
             ui.label("Load a ROM, then watch an address range.");
             return;
         };
@@ -281,6 +483,114 @@ impl ForgeIdeApp {
                         "frame {:>8}  {:04X}: {:02X} -> {:02X}",
                         ev.frame, ev.address, ev.old, ev.new
                     ));
+                }
+            });
+    }
+
+    fn disassembly_panel(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label("Instructions to show:");
+            ui.add(egui::Slider::new(self.disasm_count, 4..=64));
+        });
+        ui.separator();
+        let Some(emu) = self.emulator.as_mut() else {
+            ui.label("Load a ROM to disassemble around PC.");
+            return;
+        };
+        let pc = emu.gb.debug_pc();
+        let count = *self.disasm_count;
+        let breakpoints = emu.breakpoints.clone();
+        let gb = &mut emu.gb;
+        let instrs = disasm::disassemble(|a| gb.debug_read(a), pc, count);
+        egui::ScrollArea::vertical()
+            .max_height(ui.available_height())
+            .show(ui, |ui| {
+                for instr in &instrs {
+                    let is_pc = instr.address == pc;
+                    let is_bp = breakpoints.contains(&instr.address);
+                    let bytes_hex: String = instr
+                        .bytes
+                        .iter()
+                        .map(|b| format!("{b:02X} "))
+                        .collect();
+                    let marker = if is_pc { "-> " } else if is_bp { " * " } else { "   " };
+                    let line = format!("{marker}{:04X}  {:<9}{}", instr.address, bytes_hex, instr.text);
+                    let text = RichText::new(line).monospace();
+                    let text = if is_pc {
+                        text.color(Color32::from_rgb(120, 200, 120))
+                    } else if is_bp {
+                        text.color(Color32::from_rgb(220, 140, 80))
+                    } else {
+                        text
+                    };
+                    ui.label(text);
+                }
+            });
+        ui.label(
+            RichText::new(
+                "New decoder: TerminalGB documents a disassemble() API in docs/debugging.md \
+                 but doesn't implement it in the pinned embedding build, so this view's SM83 \
+                 decode table lives in ide/src/disasm.rs.",
+            )
+            .weak()
+            .small(),
+        );
+    }
+
+    fn breakpoints_panel(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label("Address (hex):");
+            ui.text_edit_singleline(self.breakpoint_input);
+            if ui.button("Toggle breakpoint").clicked() {
+                if let Ok(addr) = u16::from_str_radix(self.breakpoint_input.trim_start_matches("0x"), 16) {
+                    if let Some(emu) = self.emulator.as_mut() {
+                        emu.toggle_breakpoint(addr);
+                    }
+                } else {
+                    *self.editor_status = "breakpoint: bad address".to_string();
+                }
+            }
+        });
+        ui.separator();
+        let Some(emu) = self.emulator.as_mut() else {
+            ui.label("Load a ROM to set breakpoints.");
+            return;
+        };
+        if emu.breakpoints.is_empty() {
+            ui.label("No breakpoints set.");
+            return;
+        }
+        let mut to_remove = None;
+        for &addr in &emu.breakpoints {
+            ui.horizontal(|ui| {
+                ui.monospace(format!("{addr:04X}"));
+                if ui.small_button("remove").clicked() {
+                    to_remove = Some(addr);
+                }
+            });
+        }
+        if let Some(addr) = to_remove {
+            emu.toggle_breakpoint(addr);
+        }
+    }
+
+    fn console_panel(&mut self, ui: &mut egui::Ui) {
+        let Some(emu) = self.emulator.as_mut() else {
+            ui.label("Load a ROM to see the execution log.");
+            return;
+        };
+        if ui.button("Clear log").clicked() {
+            emu.console.clear();
+        }
+        egui::ScrollArea::vertical()
+            .max_height(ui.available_height())
+            .stick_to_bottom(true)
+            .show(ui, |ui| {
+                if emu.console.is_empty() {
+                    ui.label("(no events logged yet -- breakpoint hits and state loads show up here)");
+                }
+                for line in &emu.console {
+                    ui.monospace(line);
                 }
             });
     }
@@ -329,101 +639,24 @@ impl eframe::App for ForgeIdeApp {
         self.update_screen_texture(ctx);
 
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                if ui.button("Open file").clicked() {
-                    self.open_file_dialog();
-                }
-                if ui.button("Save file").clicked() {
-                    self.save_file();
-                }
-                ui.separator();
-                ui.label("ROM path:");
-                ui.text_edit_singleline(&mut self.rom_path_input);
-                if ui.button("Load ROM").clicked() {
-                    let path = PathBuf::from(self.rom_path_input.trim());
-                    self.load_rom(path);
-                }
-                if ui.button("Load bundled test ROM").clicked() {
-                    self.load_bundled_rom();
-                }
-                ui.separator();
-                let has_emu = self.emulator.is_some();
-                ui.add_enabled_ui(has_emu, |ui| {
-                    let running = self.emulator.as_ref().map(|e| e.running).unwrap_or(false);
-                    if ui.button(if running { "Pause" } else { "Play" }).clicked() {
-                        if let Some(emu) = &mut self.emulator {
-                            emu.running = !emu.running;
-                        }
-                    }
-                    if ui.button("Step instruction").clicked() {
-                        if let Some(emu) = &mut self.emulator {
-                            emu.step_instruction();
-                        }
-                    }
-                    if ui.button("Step frame").clicked() {
-                        if let Some(emu) = &mut self.emulator {
-                            emu.step_frame();
-                        }
-                    }
-                });
-                if !self.editor_status.is_empty() {
-                    ui.separator();
-                    ui.label(&self.editor_status);
-                }
-            });
+            self.toolbar(ui);
         });
 
-        egui::SidePanel::left("editor_panel")
-            .resizable(true)
-            .default_width(420.0)
-            .show(ctx, |ui| {
-                ui.label(
-                    self.open_file
-                        .as_ref()
-                        .map(|p| p.display().to_string())
-                        .unwrap_or_else(|| "(no file open)".to_string()),
-                );
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    ui.add(
-                        egui::TextEdit::multiline(&mut self.editor_text)
-                            .font(egui::TextStyle::Monospace)
-                            .desired_width(f32::INFINITY)
-                            .desired_rows(40),
-                    );
-                });
-            });
-
-        egui::SidePanel::right("debug_panel")
-            .resizable(true)
-            .default_width(420.0)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.right_tab, RightTab::Memory, "Memory");
-                    ui.selectable_value(&mut self.right_tab, RightTab::Watch, "Watch");
-                    ui.selectable_value(&mut self.right_tab, RightTab::Registers, "Registers");
-                    ui.selectable_value(&mut self.right_tab, RightTab::Png2Tile, "PNG->Tile");
-                });
-                ui.separator();
-                match self.right_tab {
-                    RightTab::Memory => self.memory_panel(ui),
-                    RightTab::Watch => self.watch_panel(ui),
-                    RightTab::Registers => self.registers_panel(ui),
-                    RightTab::Png2Tile => self.png2tile_panel(ui),
-                }
-            });
-
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.label(RichText::new("Emulator").strong());
-            if let Some(tex) = &self.screen_texture {
-                let size = tex.size_vec2() * 3.0;
-                ui.image((tex.id(), size));
-            } else {
-                ui.label("No ROM loaded. Use \"Load bundled test ROM\" for a quick smoke test.");
-            }
-            if let Some(emu) = &self.emulator {
-                ui.label(format!("{} -- {}", emu.rom_title, emu.rom_path));
-            }
-        });
+        let mut viewer = AppTabViewer {
+            open_file: &self.open_file,
+            editor_text: &mut self.editor_text,
+            emulator: &mut self.emulator,
+            screen_texture: &self.screen_texture,
+            watch_addr_input: &mut self.watch_addr_input,
+            watch_len_input: &mut self.watch_len_input,
+            breakpoint_input: &mut self.breakpoint_input,
+            disasm_count: &mut self.disasm_count,
+            editor_status: &mut self.editor_status,
+            png2tile: &mut self.png2tile,
+        };
+        DockArea::new(&mut self.dock_state)
+            .style(Style::from_egui(ctx.style().as_ref()))
+            .show(ctx, &mut viewer);
     }
 }
 

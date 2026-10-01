@@ -1,0 +1,27 @@
+{
+  "source_tile_count": 4,
+  "unique_tile_count": 2,
+  "references": [
+    {
+      "source_index": 0,
+      "unique_id": 0,
+      "flip": "none"
+    },
+    {
+      "source_index": 1,
+      "unique_id": 0,
+      "flip": "h"
+    },
+    {
+      "source_index": 2,
+      "unique_id": 1,
+      "flip": "none"
+    },
+    {
+      "source_index": 3,
+      "unique_id": 1,
+      "flip": "h"
+    }
+  ],
+  "rotation_findings": []
+}

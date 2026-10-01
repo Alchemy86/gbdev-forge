@@ -1,1 +1,5 @@
 /target
+
+# RGBDS build output -- rebuild from examples/hello-gb/hello.asm (see its README.md)
+examples/hello-gb/*.o
+examples/hello-gb/*.gb

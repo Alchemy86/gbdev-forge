@@ -50,32 +50,55 @@ including the solid-color-collapse case.
 
 ## The `ide/` crate (GUI shell)
 
-`cargo run -p forge-ide` opens the actual IDE window: `egui`/`eframe`
-shell with a file-editor pane, an embedded-emulator panel, a live WRAM hex
-viewer, an address read/write watch, a register panel, and a PNG->tile
-panel that calls `forge-png2tile`'s library functions directly (no
-subprocess). The emulator panel depends on TerminalGB
+`cargo run -p forge-ide` opens the actual IDE window: an `egui_dock`-based
+multi-panel shell (Editor, Emulator, Registers, Memory, Watch, Disassembly,
+Breakpoints, Console, PNG->Tile, each an independently resizable/re-dockable
+tab - see `docs/getting-started.md` for the full tour) over an embedded
+TerminalGB emulator. The emulator panel depends on TerminalGB
 (`github.com/Alchemy86/TerminalGB`) as a pinned git dependency, built with
 `default-features = false` - the embedding build documented in that repo's
 `docs/portability.md#7a-embedding-the-core`. That's a **private repo**, so
 cloning/building here needs `gh auth switch --user Alchemy86` (or
 equivalent credentials) and `.cargo/config.toml`'s `net.git-fetch-with-cli
 = true` (Cargo's own git client doesn't reuse the system git credential
-helper the way plain `git` does).
+helper the way plain `git` does). `egui_dock` is pinned to `0.14`, the last
+version matching this workspace's `egui 0.29` (check
+`index.crates.io/eg/ui/egui_dock` before bumping either - the two version
+lines are tied together, see their `Cargo.toml` deps).
 
-The embedding build only exposes `peek`/`peek_range`/`debug_read`/
-`debug_write`, `debug_pc`/`debug_ime`/`debug_rom_bank`/`debug_halt_bug`,
-`frame`/`step_instruction`, and `image()` - **not** the full A/B/C/D/E/H/L/
-SP register file or a per-address touched-list. The watch panel
-(`ide/src/emulator.rs`) therefore diffs `peek_range` samples frame over
-frame to infer writes rather than reading a real touched-address feed;
-a full register view and a real touched-list are core-side additions, not
-IDE-side gaps. `ide/assets/test-roms/gbselftest.gb` (MIT, mirrored from
-TerminalGB's `third_party/gbselftest/`) is the bundled one-click smoke-test
-ROM. `cargo run -p forge-ide --example headless_smoke` runs that ROM
-headless (no window) and asserts the framebuffer actually changes
-frame-to-frame - the fastest way to check the embedding still works
-without a display.
+The embedding build exposes `peek`/`peek_range`/`debug_read`/`debug_write`,
+`debug_pc`/`debug_ime`/`debug_rom_bank`/`debug_halt_bug`,
+`frame`/`step_instruction`, `image()`, and `save_state`/`load_state` -
+**not** the full A/B/C/D/E/H/L/SP register file or a per-address
+touched-list, and **no disassembler** (TerminalGB's `docs/debugging.md`
+documents a planned `disassemble()` API but it isn't implemented at the
+pinned rev). `ide/src/disasm.rs` is therefore a small from-scratch SM83
+decoder written for the Disassembly panel - extend its opcode table rather
+than re-checking TerminalGB for one first. The Watch panel
+(`ide/src/emulator.rs`) diffs `peek_range` samples frame over frame to
+infer writes rather than reading a real touched-address feed; a full
+register view and a real touched-list are core-side additions, not IDE-side
+gaps. `run_until_breakpoint` (`ide/src/emulator.rs`) is new IDE-side logic
+on top of `step_instruction` - it has no core-side equivalent to call into.
+`ide/assets/test-roms/gbselftest.gb` (MIT, mirrored from TerminalGB's
+`third_party/gbselftest/`) is the bundled one-click smoke-test ROM.
+`cargo run -p forge-ide --example headless_smoke` runs it headless and
+asserts the framebuffer actually changes frame-to-frame; `cargo run -p
+forge-ide --example run_rom -- <rom.gb> [frames] [out.png]` does the same
+for any ROM file, with a per-frame PC/LY/LCDC trace - both the fastest way
+to check the embedding (or a freshly built ROM) without a display.
+`ide/src/emulator.rs`'s `#[cfg(test)]` module covers the breakpoint/step/
+save-state logic directly against the bundled ROM, independent of any GUI
+input delivery.
+
+## `examples/hello-gb/`
+
+The one real, buildable example in this repo: see its own `README.md` for
+the exact `forge-png2tile` command and RGBDS build steps, and for a real
+bug (an unset LCDC bit left the screen blank) that building it caught.
+RGBDS isn't vendored here - fetch it the same way as `rgbgfx` above. Its
+`.o`/`.gb` build output is gitignored; rebuild rather than expecting them
+to be present.
 
 ## Maintaining this file
 
