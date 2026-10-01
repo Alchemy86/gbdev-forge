@@ -72,6 +72,35 @@ Both are wired into the `ide/` shell's Pack and Bank panels
 (`ide/src/pack_panel.rs`, `ide/src/bank_panel.rs`) calling their library
 functions directly, matching the Png2Tile panel's no-subprocess pattern.
 
+## Taking real screenshots of the `ide/` GUI headlessly
+
+The sandbox this repo is usually worked in has no `Xvfb`/`xdotool`/window
+manager preinstalled, no root/sudo, and no `apt`/full `dnf install` - but
+`dnf download --resolve --destdir .` fetches RPMs (and their deps) without
+root, and `rpm2cpio foo.rpm | cpio -idmv` extracts one into a local
+directory whose binaries run fine against the system's own libs (same
+Fedora release) with `LD_LIBRARY_PATH` pointed at the extracted `usr/lib64`.
+This is how a from-scratch headless capture was done for the screenshots in
+`docs/screenshots/`: `dnf download` + extract `xorg-x11-server-Xvfb`,
+`xdotool` (+ its `libxdo` runtime dep), and `fluxbox` (a window manager is
+**required** - `eframe`/`winit`'s GLX window never becomes visible to
+`import -window root` without one managing/mapping it, even though the X
+window itself is created and alive). Launch order: `Xvfb :99 -screen 0
+1280x900x24`, then `fluxbox` on that display, then the app itself with
+`env -u WAYLAND_DISPLAY DISPLAY=:99 ./target/release/forge-ide` (unsetting
+an inherited `WAYLAND_DISPLAY` matters - winit's backend selection can be
+thrown off by a stale Wayland socket env var even when targeting X11).
+`import -window root` (ImageMagick, already present) captures the frame;
+`xdotool mousemove/click`/`key`/`type` drives it. Several of the IDE's
+panel buttons (`Toggle breakpoint`, `Watch`) sit in an `ui.horizontal` whose
+preceding `text_edit_singleline` greedily claims the row width and pushes
+the button past the dock panel's right edge, invisible and unclickable by
+coordinate in the Breakpoints/Watch tabs at the default dock width -
+`xdotool key Tab` then `Return`/`space` from the text field reaches it
+regardless (keyboard focus order still includes it). Not an IDE bug worth
+fixing for screenshot purposes, but worth knowing if driving those two
+panels by coordinate click ever silently does nothing.
+
 ## The `ide/` crate (GUI shell)
 
 `cargo run -p forge-ide` opens the actual IDE window: an `egui_dock`-based

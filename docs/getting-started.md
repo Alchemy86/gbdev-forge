@@ -29,6 +29,12 @@ app works. The default layout on first launch:
   count, host-write count for the loaded ROM.
 - **Memory** / **Watch** / **Breakpoints** / **Console** (right bottom,
   tabbed).
+- **Disassembly** / **PNG->Tile** / **Pack** / **Bank** (bottom-left,
+  tabbed) -- the latter three call `forge-png2tile`/`forge-pack`/
+  `forge-bank`'s library functions directly (no subprocess).
+
+See [`usage.md`](usage.md) for a full task-by-task walkthrough with
+screenshots of each panel actually running.
 
 ## Running a ROM
 
@@ -122,5 +128,3 @@ cargo run -p forge-ide --example run_rom -- path/to/rom.gb 10 /tmp/out.png
   hardware-style breakpoint on memory access).
 - No persistence for save states (in-memory slot only, cleared on IDE
   restart).
-- `forge-pack`/`forge-bank` (map/meta-sprite packer, MBC bank allocator) are
-  separate, still-in-progress crates -- the IDE doesn't wire into them yet.
