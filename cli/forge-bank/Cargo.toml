@@ -1,0 +1,15 @@
+[package]
+name = "forge-bank"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "MBC (Memory Bank Controller) bank allocator: packs a JSON manifest into 16KB ROM banks and an RGBDS linker-script fragment"
+
+[[bin]]
+name = "forge-bank"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

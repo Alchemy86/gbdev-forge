@@ -1,5 +1,7 @@
+mod bank_panel;
 mod disasm;
 mod emulator;
+mod pack_panel;
 mod png2tile_panel;
 
 use std::path::PathBuf;
@@ -9,7 +11,9 @@ use egui::{Color32, RichText};
 use egui_dock::{DockArea, DockState, NodeIndex, Style, TabViewer};
 use terminalgb::KeypadKey;
 
+use bank_panel::BankPanel;
 use emulator::Emulator;
+use pack_panel::PackPanel;
 use png2tile_panel::Png2TilePanel;
 
 /// A ROM bundled with the IDE itself so "load/run a ROM" has a one-click
@@ -28,6 +32,8 @@ enum Tab {
     Breakpoints,
     Console,
     Png2Tile,
+    Pack,
+    Bank,
 }
 
 impl Tab {
@@ -42,6 +48,8 @@ impl Tab {
             Tab::Breakpoints => "Breakpoints",
             Tab::Console => "Console",
             Tab::Png2Tile => "PNG->Tile",
+            Tab::Pack => "Pack",
+            Tab::Bank => "Bank",
         }
     }
 }
@@ -71,6 +79,8 @@ struct ForgeIdeApp {
     state_slot: Option<Vec<u8>>,
 
     png2tile: Png2TilePanel,
+    pack: PackPanel,
+    bank: BankPanel,
     dock_state: DockState<Tab>,
 }
 
@@ -89,7 +99,7 @@ impl Default for ForgeIdeApp {
         let [_, _] = surface.split_below(
             emulator_node,
             0.5,
-            vec![Tab::Disassembly, Tab::Png2Tile],
+            vec![Tab::Disassembly, Tab::Png2Tile, Tab::Pack, Tab::Bank],
         );
 
         Self {
@@ -105,6 +115,8 @@ impl Default for ForgeIdeApp {
             breakpoint_input: "0150".to_string(),
             state_slot: None,
             png2tile: Png2TilePanel::default(),
+            pack: PackPanel::default(),
+            bank: BankPanel::default(),
             dock_state,
         }
     }
@@ -310,6 +322,8 @@ struct AppTabViewer<'a> {
     disasm_count: &'a mut usize,
     editor_status: &'a mut String,
     png2tile: &'a mut Png2TilePanel,
+    pack: &'a mut PackPanel,
+    bank: &'a mut BankPanel,
 }
 
 impl TabViewer for AppTabViewer<'_> {
@@ -330,6 +344,8 @@ impl TabViewer for AppTabViewer<'_> {
             Tab::Breakpoints => self.breakpoints_panel(ui),
             Tab::Console => self.console_panel(ui),
             Tab::Png2Tile => self.png2tile_panel(ui),
+            Tab::Pack => self.pack_panel(ui),
+            Tab::Bank => self.bank_panel(ui),
         }
     }
 }
@@ -624,6 +640,99 @@ impl AppTabViewer<'_> {
             }
         }
     }
+
+    fn pack_panel(&mut self, ui: &mut egui::Ui) {
+        ui.label(RichText::new("forge-pack (library call, no subprocess)").strong());
+        ui.separator();
+
+        ui.label(RichText::new("Map").strong());
+        ui.label(
+            RichText::new("rows,cols,tile ids... e.g. \"2,2,0 1 1 0\"")
+                .weak()
+                .small(),
+        );
+        ui.text_edit_singleline(&mut self.pack.map_input);
+        if ui.button("Pack map").clicked() {
+            self.pack.run_map();
+        }
+        match &self.pack.map_result {
+            Some(Ok(text)) => {
+                ui.colored_label(Color32::from_rgb(120, 200, 120), text);
+            }
+            Some(Err(e)) => {
+                ui.colored_label(Color32::from_rgb(220, 100, 100), e);
+            }
+            None => {}
+        }
+
+        ui.separator();
+        ui.label(RichText::new("Meta-sprite").strong());
+        ui.horizontal(|ui| {
+            ui.label("Name:");
+            ui.text_edit_singleline(&mut self.pack.sprite_name);
+        });
+        ui.label(
+            RichText::new("one \"tile_id offset_x offset_y flip\" per line (flip: none/h/v/hv)")
+                .weak()
+                .small(),
+        );
+        ui.add(
+            egui::TextEdit::multiline(&mut self.pack.sprite_input)
+                .font(egui::TextStyle::Monospace)
+                .desired_rows(4),
+        );
+        if ui.button("Pack meta-sprite").clicked() {
+            self.pack.run_sprite();
+        }
+        match &self.pack.sprite_result {
+            Some(Ok(text)) => {
+                ui.colored_label(Color32::from_rgb(120, 200, 120), text);
+            }
+            Some(Err(e)) => {
+                ui.colored_label(Color32::from_rgb(220, 100, 100), e);
+            }
+            None => {}
+        }
+    }
+
+    fn bank_panel(&mut self, ui: &mut egui::Ui) {
+        ui.label(RichText::new("forge-bank (library call, no subprocess)").strong());
+        ui.horizontal(|ui| {
+            ui.label("MBC:");
+            ui.text_edit_singleline(&mut self.bank.mbc);
+            ui.label("Cart size (bytes):");
+            ui.text_edit_singleline(&mut self.bank.cart_size);
+        });
+        ui.label(
+            RichText::new("one \"name size [bank]\" per line; omit bank to pack automatically")
+                .weak()
+                .small(),
+        );
+        ui.add(
+            egui::TextEdit::multiline(&mut self.bank.items_input)
+                .font(egui::TextStyle::Monospace)
+                .desired_rows(6),
+        );
+        if ui.button("Allocate").clicked() {
+            self.bank.run();
+        }
+        ui.separator();
+        match &self.bank.result {
+            Some(Ok(text)) => {
+                egui::ScrollArea::vertical()
+                    .max_height(ui.available_height())
+                    .show(ui, |ui| {
+                        ui.colored_label(Color32::from_rgb(120, 200, 120), text);
+                    });
+            }
+            Some(Err(e)) => {
+                ui.colored_label(Color32::from_rgb(220, 100, 100), e);
+            }
+            None => {
+                ui.label("No allocation run yet.");
+            }
+        }
+    }
 }
 
 impl eframe::App for ForgeIdeApp {
@@ -653,6 +762,8 @@ impl eframe::App for ForgeIdeApp {
             disasm_count: &mut self.disasm_count,
             editor_status: &mut self.editor_status,
             png2tile: &mut self.png2tile,
+            pack: &mut self.pack,
+            bank: &mut self.bank,
         };
         DockArea::new(&mut self.dock_state)
             .style(Style::from_egui(ctx.style().as_ref()))

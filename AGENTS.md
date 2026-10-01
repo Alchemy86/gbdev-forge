@@ -48,12 +48,37 @@ separately *reports but does not merge* 90/270-degree rotation matches
 (no hardware rotate flag exists). See its module tests for the mechanics,
 including the solid-color-collapse case.
 
+## `cli/forge-pack` and `cli/forge-bank`
+
+`forge-pack` turns a declared map (rows x cols of tile ids) or meta-sprite
+(named tiles with x/y offsets + flip) into the index-only arrays real VRAM
+tile-maps and OAM entries actually hold - never re-flattened pixel data.
+Optionally bounds-checks declared tile ids against a `forge-png2tile
+--out-map` JSON file via `parse_tile_map_ref`. Flip is encoded as the real
+OAM attribute byte bits (0x20 = X flip, 0x40 = Y flip) - see
+`flip_flags_byte` in `cli/forge-pack/src/lib.rs`.
+
+`forge-bank` allocates a JSON manifest's items into 16KB MBC1/3/5 ROM banks:
+items with an explicit `bank` pin (including `0`, the fixed/always-mapped
+bank) are placed exactly there; everything else is "bankable" and packed
+first-fit-decreasing by size into banks 1.. (bank 0 is never auto-filled).
+Overflow - a pinned item not fitting its bank, or a bankable item not
+fitting anywhere within the manifest's `cart_size` ceiling - is always a
+hard error naming the item and the exact byte deficit, never a silent wrap.
+Emits an RGBDS linker-script fragment (`SECTION "x", ROM0` for bank 0 items,
+`SECTION "x", ROMX, BANK[n]` otherwise) alongside the JSON bank map.
+
+Both are wired into the `ide/` shell's Pack and Bank panels
+(`ide/src/pack_panel.rs`, `ide/src/bank_panel.rs`) calling their library
+functions directly, matching the Png2Tile panel's no-subprocess pattern.
+
 ## The `ide/` crate (GUI shell)
 
 `cargo run -p forge-ide` opens the actual IDE window: an `egui_dock`-based
 multi-panel shell (Editor, Emulator, Registers, Memory, Watch, Disassembly,
-Breakpoints, Console, PNG->Tile, each an independently resizable/re-dockable
-tab - see `docs/getting-started.md` for the full tour) over an embedded
+Breakpoints, Console, PNG->Tile, Pack, Bank, each an independently
+resizable/re-dockable tab - see `docs/getting-started.md` for the full tour)
+over an embedded
 TerminalGB emulator. The emulator panel depends on TerminalGB
 (`github.com/Alchemy86/TerminalGB`) as a pinned git dependency, built with
 `default-features = false` - the embedding build documented in that repo's

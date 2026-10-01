@@ -12,6 +12,8 @@ path = "src/main.rs"
 [dependencies]
 forge-core = { path = "../crates/forge-core" }
 forge-png2tile = { path = "../cli/forge-png2tile" }
+forge-pack = { path = "../cli/forge-pack" }
+forge-bank = { path = "../cli/forge-bank" }
 eframe = "0.29"
 egui = "0.29"
 egui_dock = "0.14"
