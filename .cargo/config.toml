@@ -1,0 +1,7 @@
+# `ide`'s `terminalgb` dependency is a private git repo. Cargo's built-in
+# git client doesn't reuse the system `git` credential helper, so point it
+# at the system `git` binary (which already has working credentials via
+# `gh`/SSH) instead of reimplementing auth. See
+# https://doc.rust-lang.org/cargo/reference/config.html#netgit-fetch-with-cli
+[net]
+git-fetch-with-cli = true

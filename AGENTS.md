@@ -48,6 +48,35 @@ separately *reports but does not merge* 90/270-degree rotation matches
 (no hardware rotate flag exists). See its module tests for the mechanics,
 including the solid-color-collapse case.
 
+## The `ide/` crate (GUI shell)
+
+`cargo run -p forge-ide` opens the actual IDE window: `egui`/`eframe`
+shell with a file-editor pane, an embedded-emulator panel, a live WRAM hex
+viewer, an address read/write watch, a register panel, and a PNG->tile
+panel that calls `forge-png2tile`'s library functions directly (no
+subprocess). The emulator panel depends on TerminalGB
+(`github.com/Alchemy86/TerminalGB`) as a pinned git dependency, built with
+`default-features = false` - the embedding build documented in that repo's
+`docs/portability.md#7a-embedding-the-core`. That's a **private repo**, so
+cloning/building here needs `gh auth switch --user Alchemy86` (or
+equivalent credentials) and `.cargo/config.toml`'s `net.git-fetch-with-cli
+= true` (Cargo's own git client doesn't reuse the system git credential
+helper the way plain `git` does).
+
+The embedding build only exposes `peek`/`peek_range`/`debug_read`/
+`debug_write`, `debug_pc`/`debug_ime`/`debug_rom_bank`/`debug_halt_bug`,
+`frame`/`step_instruction`, and `image()` - **not** the full A/B/C/D/E/H/L/
+SP register file or a per-address touched-list. The watch panel
+(`ide/src/emulator.rs`) therefore diffs `peek_range` samples frame over
+frame to infer writes rather than reading a real touched-address feed;
+a full register view and a real touched-list are core-side additions, not
+IDE-side gaps. `ide/assets/test-roms/gbselftest.gb` (MIT, mirrored from
+TerminalGB's `third_party/gbselftest/`) is the bundled one-click smoke-test
+ROM. `cargo run -p forge-ide --example headless_smoke` runs that ROM
+headless (no window) and asserts the framebuffer actually changes
+frame-to-frame - the fastest way to check the embedding still works
+without a display.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.

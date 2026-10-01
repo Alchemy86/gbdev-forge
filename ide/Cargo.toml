@@ -1,0 +1,24 @@
+[package]
+name = "forge-ide"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "gbdev-forge IDE shell: code editor + embedded emulator + asset pipeline, in one window"
+
+[[bin]]
+name = "forge-ide"
+path = "src/main.rs"
+
+[dependencies]
+forge-core = { path = "../crates/forge-core" }
+forge-png2tile = { path = "../cli/forge-png2tile" }
+eframe = "0.29"
+egui = "0.29"
+image = { version = "0.25", default-features = false, features = ["png"] }
+rfd = "0.15"
+
+# The embedding build per docs/portability.md#7a: `default-features = false`
+# pulls in only the emulator core (CPU/PPU/MBC/APU model) and no frontend --
+# no window system, no terminal, no host audio. This crate's own eframe
+# window is the only frontend in this binary.
+terminalgb = { git = "https://github.com/Alchemy86/TerminalGB.git", rev = "3ff76968f68a80179bf0e18a3087480341961b9b", default-features = false }

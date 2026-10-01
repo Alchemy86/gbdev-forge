@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/forge-core",
     "cli/forge-png2tile",
+    "ide",
 ]
 
 [workspace.package]
