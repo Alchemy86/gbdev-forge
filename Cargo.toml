@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/forge-core",
+    "cli/forge-png2tile",
+]
+
+[workspace.package]
+edition = "2021"
+license = "MPL-2.0"
